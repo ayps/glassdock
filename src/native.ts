@@ -6,10 +6,19 @@ import * as autostart from "@tauri-apps/plugin-autostart";
 
 export const inTauri = "__TAURI_INTERNALS__" in window;
 
+/** A picture of the screen strip behind the dock, taken as it opens (frosted glass). */
+export interface Backdrop {
+  dataUrl: string;
+  width: number; // logical px (full monitor width)
+  height: number;
+  tint: [number, number, number];
+}
+
 export interface MonitorInfo {
   width: number; // logical px
   height: number;
   scale: number;
+  backdrop?: Backdrop | null;
 }
 
 export interface Wallpaper {
@@ -130,10 +139,12 @@ export const githubQuery = <T = any>(query: string, variables: Record<string, un
 export interface ClaudeWindow { used_percentage?: number; resets_at?: number }
 export interface ClaudeUsage {
   configured: boolean;
+  /** "ok" when the numbers came straight from Anthropic; otherwise why not ("no_login", "expired", ...). */
+  live?: string;
   data: { updated?: number; rate_limits?: { five_hour?: ClaudeWindow; seven_day?: ClaudeWindow } } | null;
 }
 export const claudeUsage = (): Promise<ClaudeUsage> =>
-  inTauri ? invoke<ClaudeUsage>("claude_usage") : Promise.resolve({ configured: false, data: null });
+  inTauri ? invoke<ClaudeUsage>("claude_usage") : Promise.resolve({ configured: false, live: "no_login", data: null });
 export const claudeSetup = (replace: boolean) => invoke<void>("claude_setup", { replace });
 
 /** Windows accent colour, in shades for dark and light cards. Null outside Windows. */
@@ -151,3 +162,18 @@ export const recycleOpen = () => invoke<void>("recycle_open");
 export const canAutostart = inTauri && import.meta.env.PROD;
 export const autostartEnabled = (): Promise<boolean> => (canAutostart ? autostart.isEnabled() : Promise.resolve(false));
 export const setAutostart = (on: boolean): Promise<void> => (on ? autostart.enable() : autostart.disable());
+
+// ---- Settings file (survives restarts; local storage alone could lose changes at shutdown)
+export const settingsLoad = (): Promise<string | null> =>
+  inTauri ? invoke<string | null>("settings_load").catch(() => null) : Promise.resolve(null);
+export const settingsSave = (json: string): Promise<void> =>
+  inTauri ? invoke<void>("settings_save", { json }) : Promise.resolve();
+
+// ---- The lip at the top of the screen, and screen-sharing privacy
+export const setLipStyle = (alert: string | null, theme: string, priv: boolean, push: number): Promise<void> =>
+  inTauri ? invoke<void>("set_lip_style", { alert, theme, private: priv, push }) : Promise.resolve();
+
+// ---- Updates from GitHub Releases
+export const updateCheck = (): Promise<string | null> =>
+  canAutostart ? invoke<string | null>("update_check").catch(() => null) : Promise.resolve(null);
+export const updateInstall = () => invoke<void>("update_install");

@@ -7,12 +7,16 @@ src/                     the dock you see (TypeScript + CSS, no framework)
   dock.ts                layout, slide animation, drag to reorder, elastic scrolling,
                          right-click menu, Edit widgets panel, expanded panels, glass
   widgets/               one file per widget, plus index.ts (the registry)
-  settings.ts            saved choices (order, themes, cities...) in local storage
+  settings.ts            saved choices (order, themes, cities...) in settings.json
+  lip.ts (+ lip.html)    the small glass lip at the top of the screen (its own window)
   native.ts              every call into the Rust side, in one place
   google.ts, connect.ts  Google Calendar / Tasks data and the "Connect Google" view
   ui.ts                  small HTML helpers (rings, bars, icons, escaping)
 src-tauri/src/           the native side (Rust)
-  hover.rs               top-middle hover detection, show / hide, multi-monitor
+  hover.rs               push-to-reveal, the lip, Ctrl + Alt + Space, show / hide, multi-monitor
+  rawin.rs               raw mouse / keyboard input (how far you push past the edge, clicks, keys)
+  capture.rs             picture of the screen behind the dock, for the frosted glass
+  store.rs               writes settings.json safely
   platform.rs            Windows-only calls: no focus stealing, full-screen check
   wall.rs                reads the wallpaper for the glass and its tint
   accent.rs              the Windows accent colour
@@ -20,7 +24,7 @@ src-tauri/src/           the native side (Rust)
   media.rs               Windows media controls (what's playing, play / pause / skip)
   google.rs              Google OAuth (PKCE + loopback), tokens in Credential Manager
   github.rs              GitHub token in Credential Manager, GraphQL proxy
-  claude.rs              Claude Code status-line bridge
+  claude.rs              Claude usage: direct check with Claude Code's sign-in, status-line fallback
   recycle.rs             Recycle Bin size, open, empty
 ```
 
@@ -72,3 +76,16 @@ Text styles: `v` (numbers), `b` (body), `c` (caption), `lbl` (small label). Colo
 - The glass is a blurred copy of the wallpaper, not of the windows behind the dock.
 - Claude usage only refreshes while Claude Code is running.
 - The installer isn't code-signed, so SmartScreen warns on first install.
+
+## Releasing an update
+
+Installed copies check this repository's latest release for a `latest.json` file and update
+themselves. To publish a version:
+
+1. Raise `version` in `package.json`, `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`.
+2. Run `powershell -ExecutionPolicy Bypass -File scripts\release.ps1`. The first time, it creates
+   your signing key in `%USERPROFILE%\.tauri\` (keep it private and backed up; never commit it).
+3. Create a GitHub release tagged `v<version>` and upload the two files the script prints:
+   the setup `.exe` and `latest.json`.
+
+A plain `npm run tauri build` still works for local testing; it just isn't signed for updates.

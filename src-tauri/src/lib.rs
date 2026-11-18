@@ -5,14 +5,17 @@
 // reads the wallpaper and the hardware statistics.
 
 mod accent;
+mod capture;
 mod claude;
 mod github;
 mod google;
 mod hover;
 mod media;
 mod platform;
+mod rawin;
 mod recycle;
 mod stats;
+mod store;
 mod wall;
 
 use std::sync::{Arc, Mutex};
@@ -23,6 +26,7 @@ pub struct Shared {
     pub stats: Mutex<stats::Stats>,
     pub google: google::Google,
     pub github: github::GitHub,
+    pub claude: claude::Live,
     /// GlassDock's settings folder (also where Claude usage is saved).
     pub dir: std::path::PathBuf,
 }
@@ -153,12 +157,21 @@ async fn github_query(
 #[derive(serde::Serialize)]
 struct ClaudeUsage {
     configured: bool,
+    /// "ok", "no_login" (Claude Code isn't signed in here), "expired", or an error.
+    live: String,
     data: serde_json::Value,
 }
 
+/// Plan usage: straight from Anthropic when Claude Code is signed in on this PC,
+/// otherwise the last numbers Claude Code's status line saved.
 #[tauri::command]
-fn claude_usage(shared: State<'_, Arc<Shared>>) -> ClaudeUsage {
-    ClaudeUsage { configured: claude::configured(), data: claude::usage(&shared.dir) }
+async fn claude_usage(shared: State<'_, Arc<Shared>>) -> Result<ClaudeUsage, String> {
+    let live = shared.claude.get().await;
+    let (data, live_status) = match live {
+        Ok(v) => (v, "ok".to_string()),
+        Err(e) => (claude::usage(&shared.dir), e),
+    };
+    Ok(ClaudeUsage { configured: claude::configured() || live_status == "ok", live: live_status, data })
 }
 
 #[tauri::command]
@@ -186,10 +199,70 @@ fn recycle_open() {
     recycle::open();
 }
 
+/// Saved settings (settings.json), or null on first run.
+#[tauri::command]
+fn settings_load(shared: State<'_, Arc<Shared>>) -> Option<String> {
+    store::load(&shared.dir)
+}
+
+#[tauri::command]
+fn settings_save(shared: State<'_, Arc<Shared>>, json: String) -> Result<(), String> {
+    store::save(&shared.dir, &json)
+}
+
+/// Meeting heads-up glow on the lip (a CSS colour, or none), the dock theme,
+/// and whether to keep the dock out of screen sharing and screenshots.
+#[tauri::command]
+fn set_lip_style(
+    app: tauri::AppHandle,
+    shared: State<'_, Arc<Shared>>,
+    alert: Option<String>,
+    theme: String,
+    private: bool,
+    push: f64,
+) {
+    hover::set_style(&app, &shared, alert, theme, private, push);
+}
+
+/// A newer GlassDock on GitHub Releases, if there is one (its version number).
+#[tauri::command]
+async fn update_check(app: tauri::AppHandle) -> Option<String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let update = app.updater().ok()?.check().await.ok()??;
+    Some(update.version)
+}
+
+/// Download and install the update, then restart.
+#[tauri::command]
+async fn update_install(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let update = app
+        .updater()
+        .map_err(|e| e.to_string())?
+        .check()
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("You're on the latest version.")?;
+    update.download_and_install(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
+    app.restart();
+}
+
 pub fn run() {
     tauri::Builder::default()
         // "Start with Windows": adds GlassDock to Windows' startup list, like Discord does.
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
+        // Ctrl + Alt + Space opens or closes the dock from anywhere.
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|_app, _shortcut, event| {
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        hover::toggle_from_keyboard();
+                    }
+                })
+                .build(),
+        )
+        // Updates from GitHub Releases (signed; see docs/RELEASING.md).
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let dir = app.path().app_config_dir().unwrap_or_else(|_| std::env::temp_dir().join("GlassDock"));
             let shared = Arc::new(Shared {
@@ -197,11 +270,19 @@ pub fn run() {
                 stats: Mutex::new(stats::Stats::new()),
                 google: google::Google::new(dir.clone()),
                 github: github::GitHub::new(),
+                claude: claude::Live::default(),
                 dir,
             });
             app.manage(shared.clone());
             if let Some(w) = app.get_webview_window("dock") {
                 platform::prepare_window(&w);
+            }
+            {
+                use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
+                // Another app may already own this combination; the dock still works by pushing.
+                let _ = app
+                    .global_shortcut()
+                    .register(Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::Space));
             }
             hover::start(app.handle().clone(), shared);
             wall::watch(app.handle().clone());
@@ -210,7 +291,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![set_dock_size, hide_done, get_wallpaper, system_stats, media_now, media_action,
             panel_focus, set_hold, open_url, google_status, google_set_client, google_sign_in, google_sign_out, google_api,
             github_status, github_set_token, github_clear, github_query, claude_usage, claude_setup, system_accent,
-            recycle_bin, recycle_empty, recycle_open
+            recycle_bin, recycle_empty, recycle_open, settings_load, settings_save, set_lip_style, update_check,
+            update_install
         ])
         .run(tauri::generate_context!())
         .expect("error while running GlassDock");

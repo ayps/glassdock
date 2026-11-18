@@ -29,6 +29,15 @@ function describe(code: number): string {
   return "Thunderstorm";
 }
 
+interface Place { name: string; admin1?: string; country?: string; latitude: number; longitude: number }
+
+async function searchPlaces(q: string): Promise<Place[]> {
+  const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=6&language=en&format=json`;
+  const r = await fetch(url);
+  if (!r.ok) return [];
+  return (await r.json()).results ?? [];
+}
+
 const deg = (n: number) => `${Math.round(n) < 0 ? "−" : ""}${Math.abs(Math.round(n))}°`;
 
 export default defineWidget<Weather | null>({
@@ -74,5 +83,51 @@ export default defineWidget<Weather | null>({
         <span class="c">Feels like ${deg(w.feels)}</span>
       </div>
     </div>`;
+  },
+
+  // Click the card to change the city.
+  panel(root, ctx) {
+    let results: Place[] = [];
+    let msg = "";
+    const draw = () => {
+      const cur = settings.get().weather;
+      root.innerHTML = `
+        <div class="xhead"><span class="xtitle">Weather location</span><span class="c">Now: ${esc(cur.name)}</span></div>
+        <form class="search" data-find>
+          <svg class="ic" width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+          <input name="q" placeholder="Search for a city, then press Enter" aria-label="Search for a city" autocomplete="off">
+        </form>
+        <div class="xresults">${results.map((p, i) => `
+          <button class="xres" data-pick="${i}">
+            <span class="b" style="font-weight:600">${esc(p.name)}</span>
+            <span class="c ell">${esc([p.admin1, p.country].filter(Boolean).join(", "))}</span>
+          </button>`).join("")}</div>
+        <div class="xmsg" data-msg>${esc(msg)}</div>
+        <div class="xnote">Weather data by Open-Meteo.com</div>`;
+    };
+    root.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const q = (root.querySelector<HTMLInputElement>("[name=q]")!.value || "").trim();
+      if (!q) return;
+      msg = "Searching…"; results = []; draw();
+      try {
+        results = await searchPlaces(q);
+        msg = results.length ? "" : `No place called "${q}" found.`;
+      } catch {
+        msg = "Couldn't search. Check your connection.";
+      }
+      draw();
+      const input = root.querySelector<HTMLInputElement>("[name=q]");
+      if (input) input.value = q;
+    });
+    root.addEventListener("click", async (e) => {
+      const b = (e.target as HTMLElement).closest<HTMLElement>("[data-pick]");
+      if (!b) return;
+      const p = results[Number(b.dataset.pick)];
+      settings.update((s) => { s.weather = { name: p.name, lat: p.latitude, lon: p.longitude }; });
+      await ctx.reload();
+      ctx.close();
+    });
+    draw();
   },
 });

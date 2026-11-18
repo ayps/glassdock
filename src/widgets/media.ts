@@ -7,6 +7,8 @@ import { NowPlaying, mediaAction, mediaNow } from "../native";
 // Album art is only sent when the track changes, so keep the last one here.
 let artKey: string | null = null;
 let artUrl: string | null = null;
+/** Something is playing (or paused) in a media app: the card is wide. Otherwise a small tile. */
+let active = false;
 
 const PREV = '<path d="M18 18.5 10 12l8-6.5v13Z"/><rect x="6" y="5.5" width="2.2" height="13" rx="1.1"/>';
 const PLAY = '<path d="M8 5.6v12.8a1 1 0 0 0 1.5.86l10.4-6.4a1 1 0 0 0 0-1.72L9.5 4.74A1 1 0 0 0 8 5.6Z"/>';
@@ -22,12 +24,14 @@ const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).
 export default defineWidget<NowPlaying | null>({
   id: "media",
   name: "Media",
-  size: "wide",
+  // Wide while there's something to control; a small music tile when nothing is playing.
+  get size() { return active ? "wide" : "small"; },
   icon: ICONS.media,
   bare: true,
   everyMs: 1000,
   async load() {
     const np = await mediaNow(artKey);
+    active = !!np;
     if (np && np.key !== artKey) {
       artKey = np.key;
       artUrl = np.art;
@@ -36,10 +40,9 @@ export default defineWidget<NowPlaying | null>({
   },
   view(np) {
     if (!np) {
-      return `<div class="row" style="gap:12px;height:100%;justify-content:flex-start">
-        <div class="art empty">${`<svg class="ic" width="26" height="26" viewBox="0 0 24 24" aria-hidden="true">${ICONS.media}</svg>`}</div>
-        <div class="stack" style="gap:3px"><span class="b" style="font-weight:600">Nothing playing</span>
-        <span class="c">Play something in Spotify, a browser or any media app</span></div>
+      // Small tile: it grows into the full player as soon as something plays.
+      return `<div class="bintile empty" title="Nothing playing. Play something in Spotify, a browser or any media app.">
+        <div class="bincircle"><svg class="ic" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">${ICONS.media}</svg></div>
       </div>`;
     }
     const art = artUrl

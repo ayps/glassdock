@@ -313,3 +313,7 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
   background: rgba(44, 48, 58, 0.97); /* solid while lifted, so nothing shows through */
   box-shadow: var(--card-shadow), 0 14px 32px rgba(0, 0, 0, 0.38);
 }
+
+/* Join button on the calendar card, a few minutes before a meeting */
+.card .btn.join { align-self: center; background: var(--green); color: #fff; padding: 0 12px; }
+.light .card .btn.join { background: #248a3d; }

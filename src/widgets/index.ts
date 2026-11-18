@@ -24,8 +24,8 @@ export const WIDGETS: Widget<any>[] = [claude, clocks, weather, cpu, ram, gpu, s
 /**
  * First-run arrangement, symmetric around the media card:
  * left  = Claude, clocks, weather, CPU + RAM (two small tiles = one standard)
- * right = calendar, tasks, notes, GitHub. GPU, System and Recycle Bin start switched off.
+ * right = calendar, tasks, notes, GitHub, Recycle Bin. GPU and System start switched off.
  */
-export const DEFAULT_ORDER = ["claude", "clocks", "weather", "cpu", "ram", "media", "calendar", "tasks", "notes", "github"];
+export const DEFAULT_ORDER = ["claude", "clocks", "weather", "cpu", "ram", "media", "calendar", "tasks", "notes", "github", "recycle"];
 
 export const byId = (id: string) => WIDGETS.find((w) => w.id === id);

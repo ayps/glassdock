@@ -20,7 +20,7 @@ function due(t: Task): string {
 export default defineWidget<Data>({
   id: "tasks",
   name: "Tasks",
-  size: "standard",
+  size: "wide", // room for whole task names
   icon: ICONS.tasks,
   accent: "blue",
   everyMs: 5 * 60_000,
@@ -38,7 +38,8 @@ export default defineWidget<Data>({
     if (!d.tasks.length) return `<div class="c">${d.errors.length ? "Couldn't reach Google" : "All done"}</div>`;
     return `<div class="stack" style="gap:7px">${d.tasks.slice(0, 2).map((t) => `
       <div class="row" style="gap:8px"><span class="check"></span>
-        <span class="b ell" style="flex:1">${esc(t.title)}</span><span class="c">${due(t)}</span></div>`).join("")}</div>`;
+        <span class="b ell" style="flex:1;min-width:0" title="${esc(t.title)}">${esc(t.title)}</span>
+        <span class="c" style="flex:none">${[due(t), d.accounts.length > 1 ? esc(accountLabel(t.account)) : ""].filter(Boolean).join(" · ")}</span></div>`).join("")}</div>`;
   },
 
   panel(root, ctx) {

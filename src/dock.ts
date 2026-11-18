@@ -3,9 +3,19 @@
 // "Edit widgets" panel.
 import { DEFAULT_ORDER, WIDGETS, byId } from "./widgets";
 import type { PanelContext, Widget } from "./widgets/types";
-import { settings, CardTheme, Settings } from "./settings";
+import { settings, CardTheme, Settings, PUSH_COUNTS } from "./settings";
 import { esc, icon } from "./ui";
-import { MonitorInfo, Wallpaper, autostartEnabled, canAutostart, getWallpaper, hideDone, inTauri, panelFocus, setAutostart, setDockSize, setHold, systemAccent } from "./native";
+import {
+  Backdrop, MonitorInfo, Wallpaper, autostartEnabled, canAutostart, getWallpaper, hideDone, inTauri, panelFocus, setAutostart,
+  setDockSize, setHold, setLipStyle, systemAccent, updateCheck, updateInstall,
+} from "./native";
+import calendarWidget, { meetingSoon } from "./widgets/calendar";
+import { emit } from "@tauri-apps/api/event";
+
+/** Header colours as hex, for the miniature cards in the lip (a separate window without these CSS variables). */
+const ACCENT_HEX: Record<string, string> = {
+  orange: "#ff9f5a", red: "#ff6961", yellow: "#ffd60a", green: "#30d158", teal: "#64d2ff", blue: "#409cff", purple: "#da8fff",
+};
 
 const TOP = 4; // gap above the dock
 const SIDE = 24; // transparent room around the dock for its shadow
@@ -70,6 +80,13 @@ export class Dock {
   private monitor: MonitorInfo = { width: window.innerWidth, height: window.innerHeight, scale: 1 };
   private wallpaper: Wallpaper | null = null;
   private wpImg: HTMLImageElement | null = null;
+  /** Picture of the screen behind the dock, taken as it opened (frosted glass over any app). */
+  private backdrop: Backdrop | null = null;
+  /** A newer version on GitHub Releases, if any. */
+  private update: string | null = null;
+  private updating = false;
+  private lastAlert: string | null | undefined = undefined;
+  private ready = false;
   private timer: number | null = null;
   private open = false;
   private extraH = 0; // room needed below the dock for a menu or panel
@@ -86,7 +103,7 @@ export class Dock {
   }
 
   async init() {
-    settings.init(WIDGETS.map((w) => w.id), DEFAULT_ORDER);
+    await settings.init(WIDGETS.map((w) => w.id), DEFAULT_ORDER);
     this.root.innerHTML = `
       <div class="wrap"><div class="dock" role="toolbar" aria-label="GlassDock">
         <div class="glass" aria-hidden="true"></div><div class="tint" aria-hidden="true"></div>
@@ -131,9 +148,15 @@ export class Dock {
     window.addEventListener("keydown", (e) => {
       if (e.key === "Escape") this.closeOverlay();
     });
-    settings.onChange(() => this.build());
+    settings.onChange(() => { this.build(); void this.syncLip(); });
 
     this.build();
+    this.ready = true;
+    void this.syncLip();
+    // While the dock is closed: keep the meeting glow up to date, and look for updates.
+    window.setInterval(() => void this.background(), 30_000);
+    window.setTimeout(() => void this.checkUpdate(), 20_000);
+    window.setInterval(() => void this.checkUpdate(), 6 * 3600_000);
     // First run of the installed app: start with Windows by default (switch it off in Edit widgets).
     if (canAutostart && !settings.get().autostartSet) {
       try {
@@ -167,6 +190,17 @@ export class Dock {
     this.live.forEach((l) => this.paint(l));
     this.applyTheme();
     this.layout();
+    this.sendMiniCards();
+  }
+
+  /** Tell the lip what the dock looks like, so its miniature matches. */
+  private sendMiniCards() {
+    if (!inTauri) return;
+    const cards = this.live.map((l) => ({
+      size: l.el.classList.contains("wide") ? "wide" : l.el.classList.contains("small") ? "small" : "std",
+      color: l.w.accent ? ACCENT_HEX[l.w.accent] ?? null : null,
+    }));
+    void emit("lip:cards", cards).catch(() => undefined);
   }
 
   private themeOf(id: string, s: Settings): "light" | "dark" {
@@ -210,14 +244,17 @@ export class Dock {
     this.dock.classList.toggle("light", s.dockTheme === "light");
     this.dock.classList.toggle("dark", s.dockTheme === "dark");
     let tint = s.dockTheme === "dark" ? [24, 28, 36] : [238, 241, 245];
-    if (s.tint === "wallpaper" && this.wallpaper) {
-      // Restrained tint: mostly neutral glass with a hint of the wallpaper colour.
+    // Tint from what's really behind the dock (an app or the desktop), else the wallpaper.
+    const under = this.backdrop?.tint ?? this.wallpaper?.tint;
+    if (s.tint === "wallpaper" && under) {
+      // Restrained tint: mostly neutral glass with a hint of the colour behind.
       const base = s.dockTheme === "dark" ? [14, 17, 24] : [240, 243, 247];
       const k = s.dockTheme === "dark" ? 0.25 : 0.22;
-      tint = base.map((b, i) => Math.round(b * (1 - k) + this.wallpaper!.tint[i] * k));
+      tint = base.map((b, i) => Math.round(b * (1 - k) + under[i] * k));
     }
-    // The dark glass needs more body than the light one to stay dark over bright wallpapers.
-    const a = s.dockTheme === "dark" ? 0.7 : 0.6;
+    // The dark glass needs more body than the light one to stay dark over bright apps.
+    // Over a real picture of the screen it can be clearer, so the frost shows through.
+    const a = s.dockTheme === "dark" ? (this.backdrop ? 0.6 : 0.7) : (this.backdrop ? 0.5 : 0.6);
     this.dock.style.setProperty("--dock-tint", `rgba(${tint.join(",")},${a})`);
   }
 
@@ -316,7 +353,7 @@ export class Dock {
     img.src = this.wallpaper.dataUrl;
     await img.decode().catch(() => undefined);
     this.wpImg = img;
-    this.glass.style.backgroundImage = `url("${this.wallpaper.dataUrl}")`;
+    if (!this.backdrop) this.glass.style.backgroundImage = `url("${this.wallpaper.dataUrl}")`;
     this.applyTheme();
     this.layout();
   }
@@ -326,13 +363,21 @@ export class Dock {
    * The wallpaper is assumed to "fill" the screen (the Windows default).
    */
   private placeGlass(dockW: number) {
+    const dockX = (this.monitor.width - dockW) / 2, dockY = TOP;
+    const BLEED = 60; // .glass extends 60 px past the dock so the blur has no edges
+    if (this.backdrop) {
+      // The picture starts at the monitor's top-left corner and spans its width.
+      this.glass.style.backgroundImage = `url("${this.backdrop.dataUrl}")`;
+      this.glass.style.backgroundSize = `${this.backdrop.width}px ${this.backdrop.height}px`;
+      this.glass.style.backgroundPosition = `${BLEED - dockX}px ${BLEED - dockY}px`;
+      return;
+    }
+    if (this.wallpaper) this.glass.style.backgroundImage = `url("${this.wallpaper.dataUrl}")`;
     const img = this.wpImg;
     if (!img || !img.naturalWidth) return;
     const { width: mw, height: mh } = this.monitor;
     const k = Math.max(mw / img.naturalWidth, mh / img.naturalHeight);
     const bw = img.naturalWidth * k, bh = img.naturalHeight * k;
-    const dockX = (mw - dockW) / 2, dockY = TOP;
-    const BLEED = 60; // .glass extends 60 px past the dock so the blur has no edges
     this.glass.style.backgroundSize = `${bw}px ${bh}px`;
     this.glass.style.backgroundPosition = `${(mw - bw) / 2 - dockX + BLEED}px ${(mh - bh) / 2 - dockY + BLEED}px`;
   }
@@ -348,8 +393,11 @@ export class Dock {
   }
 
   show(m: MonitorInfo) {
+    if (!this.ready) return; // still loading settings (the Rust side hides the window again)
     void this.loadAccent();
     this.monitor = m;
+    this.backdrop = m.backdrop ?? null;
+    this.applyTheme();
     this.open = true;
     this.closeOverlay();
     this.layout();
@@ -385,6 +433,7 @@ export class Dock {
   /** Reload widgets that are due. Nothing refreshes while the dock is hidden. */
   private async refresh(all: boolean) {
     const now = Date.now();
+    const sizes = this.live.map((l) => l.el.className).join("|");
     await Promise.all(
       this.live.map(async (l) => {
         const due = all ? l.data === undefined || l.w.everyMs != null || now - l.last > 60_000
@@ -399,6 +448,49 @@ export class Dock {
         this.paint(l);
       })
     );
+    // A card changed size (e.g. Media grows when music starts): re-fit the dock.
+    if (this.live.map((l) => l.el.className).join("|") !== sizes) {
+      this.layout();
+      this.sendMiniCards();
+    }
+  }
+
+  // ---------------------------------------------------------------- while closed
+  /** Every 30 s: refresh the calendar now and then, and set the meeting glow on the lip. */
+  private async background() {
+    this.sendMiniCards(); // the lip may have loaded after the dock
+    await this.syncLip();
+  }
+
+  /** Tell the lip about the meeting glow and theme, and the dock about screen-sharing privacy. */
+  private async syncLip() {
+    const s = settings.get();
+    let alert: string | null = null;
+    if (s.meetingGlow && s.order.includes("calendar")) {
+      const l = this.live.find((x) => x.w.id === "calendar");
+      if (l && (!l.data || Date.now() - l.last > 5 * 60_000) && !this.open) {
+        try {
+          l.data = await calendarWidget.load();
+          l.last = Date.now();
+          this.paint(l);
+        } catch { /* offline: no glow */ }
+      }
+      const events = (l?.data as { events?: import("./google").CalEvent[] } | undefined)?.events ?? [];
+      const soon = meetingSoon(events, 5);
+      if (soon && +soon.start > Date.now() - 60_000) alert = s.dockTheme === "light" ? "#ff3b30" : "#ff6961";
+    }
+    const key = `${alert}|${s.dockTheme}|${s.privateShare}|${s.push}`;
+    if (key === this.lastAlert) return;
+    this.lastAlert = key;
+    await setLipStyle(alert, s.dockTheme, s.privateShare, PUSH_COUNTS[s.push] ?? PUSH_COUNTS.medium);
+  }
+
+  private async checkUpdate() {
+    const v = await updateCheck();
+    if (v !== this.update) {
+      this.update = v;
+      if (this.menuFor === "panel") this.openPanel();
+    }
   }
 
   private async onClick(e: MouseEvent) {
@@ -653,6 +745,9 @@ export class Dock {
     }).join("");
     const seg = (key: string, v: string, label: string, cur: string) =>
       `<button class="seg${cur === v ? " on" : ""}" aria-pressed="${cur === v}" data-${key}="${v}">${label}</button>`;
+    const sw = (key: string, on: boolean, label: string, sub: string) => `<div class="prow">
+      <span class="pname" style="flex-direction:column;align-items:flex-start;gap:1px"><span>${label}</span><span class="c" style="font-size:11px">${sub}</span></span>
+      <button class="switch${on ? " on" : ""}" role="switch" aria-checked="${on}" aria-label="${label}" data-${key}><span></span></button></div>`;
     return `<div class="panel ${s.dockTheme}" role="dialog" aria-label="Edit widgets">
       <div class="mtitle">Widgets</div>${rows}
       <div class="sep"></div>
@@ -661,6 +756,13 @@ export class Dock {
       <div class="segs">${seg("tint", "wallpaper", "Match wallpaper", s.tint)}${seg("tint", "neutral", "Neutral", s.tint)}</div>
       ${canAutostart ? `<div class="prow"><span class="pname"><span>Start with Windows</span></span>
         <button class="switch${this.autostartOn ? " on" : ""}" role="switch" aria-checked="${this.autostartOn}" aria-label="Start with Windows" data-autostart><span></span></button></div>` : ""}
+      <div class="mtitle">Push to open</div>
+      <div class="segs">${seg("push", "short", "Light", s.push)}${seg("push", "medium", "Medium", s.push)}${seg("push", "long", "Firm", s.push)}</div>
+      ${sw("private", s.privateShare, "Hide while sharing your screen", "Also left out of screenshots")}
+      ${sw("glow", s.meetingGlow, "Meeting heads-up", "A soft glow at the top, 5 minutes before")}
+      ${this.update ? `<div class="sep"></div><div class="prow"><span class="pname"><span>GlassDock ${esc(this.update)} is available</span></span>
+        <button class="btn small" data-update ${this.updating ? "disabled" : ""}>${this.updating ? "Updating…" : "Update"}</button></div>` : ""}
+      <div class="xnote" style="padding:6px 2px 0">Open the dock: push the pointer up past the top of the screen, or press Ctrl + Alt + Space.</div>
     </div>`;
   }
 
@@ -671,12 +773,34 @@ export class Dock {
     if (!id || id.startsWith("xpanel:")) return; // panels handle their own clicks
     const get = (k: string) => t.closest<HTMLElement>(`[data-${k}]`)?.getAttribute(`data-${k}`) ?? null;
     if (id === "panel") {
-      const tog = get("toggle"), dock = get("dock"), tint = get("tint");
+      const tog = get("toggle"), dock = get("dock"), tint = get("tint"), push = get("push");
+      if (push) {
+        settings.update((x) => { x.push = push as Settings["push"]; });
+        return this.openPanel();
+      }
       if (tog) settings.update((x) => {
         x.order = x.order.includes(tog) ? x.order.filter((o) => o !== tog) : [...x.order, tog];
       });
       if (dock) settings.update((x) => { x.dockTheme = dock as Settings["dockTheme"]; });
       if (tint) settings.update((x) => { x.tint = tint as Settings["tint"]; });
+      if (t.closest("[data-private]")) {
+        settings.update((x) => { x.privateShare = !x.privateShare; });
+        return this.openPanel();
+      }
+      if (t.closest("[data-glow]")) {
+        settings.update((x) => { x.meetingGlow = !x.meetingGlow; });
+        return this.openPanel();
+      }
+      if (t.closest("[data-update]") && !this.updating) {
+        this.updating = true;
+        this.openPanel();
+        void updateInstall().catch((e) => {
+          this.updating = false;
+          console.warn("update failed", e);
+          if (this.menuFor === "panel") this.openPanel();
+        });
+        return;
+      }
       if (t.closest("[data-autostart]")) {
         const on = !this.autostartOn;
         void setAutostart(on).then(() => { this.autostartOn = on; if (this.menuFor === "panel") this.openPanel(); });

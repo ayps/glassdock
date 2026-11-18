@@ -1,4 +1,7 @@
-// User settings, saved in the app's local storage (kept by WebView2 per user).
+// User settings. Saved to settings.json in GlassDock's folder (through the Rust
+// side), with a copy in local storage. Local storage alone could lose the latest
+// changes when Windows shuts down, which is why widgets sometimes came back off.
+import { settingsLoad, settingsSave } from "./native";
 
 export type CardTheme = "auto" | "light" | "dark";
 
@@ -20,7 +23,16 @@ export interface Settings {
   lastAccount: string;
   /** Set once the installed app has turned on "Start with Windows" the first time. */
   autostartSet: boolean;
+  /** Keep the dock out of screen sharing, recordings and screenshots. */
+  privateShare: boolean;
+  /** Glow on the lip a few minutes before a meeting. */
+  meetingGlow: boolean;
+  /** How far to push the pointer past the top edge to open the dock. */
+  push: "short" | "medium" | "long";
 }
+
+/** Push distances in mouse counts. */
+export const PUSH_COUNTS = { short: 35, medium: 70, long: 130 } as const;
 
 const KEY = "glassdock.settings.v1";
 
@@ -39,16 +51,24 @@ const DEFAULTS = (order: string[]): Settings => ({
   clockStyle: "analog",
   lastAccount: "",
   autostartSet: false,
+  privateShare: true,
+  meetingGlow: true,
+  push: "medium",
 });
 
 let current: Settings | null = null;
 const listeners: (() => void)[] = [];
 
 export const settings = {
-  init(registered: string[], defaultOrder: string[]) {
+  async init(registered: string[], defaultOrder: string[]) {
     let s: Settings;
+    const fromFile = await settingsLoad();
+    let saved: string | null = fromFile;
+    if (!saved) {
+      try { saved = localStorage.getItem(KEY); } catch { saved = null; } // first run after updating: move over
+    }
     try {
-      s = { ...DEFAULTS(defaultOrder), ...JSON.parse(localStorage.getItem(KEY) ?? "{}") };
+      s = { ...DEFAULTS(defaultOrder), ...JSON.parse(saved ?? "{}") };
     } catch {
       s = DEFAULTS(defaultOrder);
     }
@@ -75,10 +95,12 @@ export const settings = {
     listeners.push(fn);
   },
   save() {
+    const json = JSON.stringify(current);
     try {
-      localStorage.setItem(KEY, JSON.stringify(current));
+      localStorage.setItem(KEY, json);
     } catch {
-      /* storage unavailable: settings last for this session only */
+      /* storage unavailable */
     }
+    settingsSave(json).catch((e) => console.warn("couldn't save settings", e));
   },
 };

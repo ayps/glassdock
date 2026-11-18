@@ -10,8 +10,9 @@ mod imp {
     };
     use std::sync::atomic::{AtomicIsize, Ordering};
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowLongPtrW, SetForegroundWindow, SetWindowLongPtrW, ShowWindow, GWL_EXSTYLE,
-        SW_HIDE, SW_SHOWNOACTIVATE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+        GetForegroundWindow, GetWindowLongPtrW, SetForegroundWindow, SetWindowDisplayAffinity, SetWindowLongPtrW,
+        ShowWindow, GWL_EXSTYLE, SW_HIDE, SW_SHOWNOACTIVATE, WDA_EXCLUDEFROMCAPTURE, WDA_NONE, WS_EX_NOACTIVATE,
+        WS_EX_TOOLWINDOW,
     };
 
     /// The window that had focus before a panel took it, to hand focus back.
@@ -99,6 +100,20 @@ mod imp {
             .any(|k| unsafe { (GetAsyncKeyState(k.0 as i32) as u16) & 0x8000 != 0 })
     }
 
+    /// Keep a window out of screen sharing, recordings and screenshots (Windows 10 2004 and later).
+    pub fn exclude_from_capture(w: &tauri::WebviewWindow, on: bool) {
+        if let Some(h) = hwnd(w) {
+            unsafe {
+                let _ = SetWindowDisplayAffinity(h, if on { WDA_EXCLUDEFROMCAPTURE } else { WDA_NONE });
+            }
+        }
+    }
+
+    /// PowerPoint (or another app) is presenting, or Windows' presentation settings are on.
+    pub fn presentation_mode() -> bool {
+        matches!(unsafe { SHQueryUserNotificationState() }, Ok(s) if s == QUNS_PRESENTATION_MODE)
+    }
+
     /// A full-screen game, video or presentation is running.
     pub fn fullscreen_app_running() -> bool {
         match unsafe { SHQueryUserNotificationState() } {
@@ -127,6 +142,10 @@ mod imp {
     pub fn fullscreen_app_running() -> bool {
         false
     }
+    pub fn presentation_mode() -> bool {
+        false
+    }
+    pub fn exclude_from_capture(_w: &tauri::WebviewWindow, _on: bool) {}
 }
 
 pub use imp::*;

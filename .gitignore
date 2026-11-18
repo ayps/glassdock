@@ -20,3 +20,7 @@ client_secret*.json
 *.log
 .DS_Store
 Thumbs.db
+
+# Update-signing keys must never be committed
+*.key
+*.key.pub

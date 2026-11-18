@@ -10,5 +10,9 @@ export default defineConfig({
     // while compiling, which crashes the watcher on Windows.
     watch: { ignored: ["**/src-tauri/**"] },
   },
-  build: { target: "es2022" },
+  build: {
+    target: "es2022",
+    // Two pages: the dock, and the small "lip" window at the top of the screen.
+    rollupOptions: { input: { main: "index.html", lip: "lip.html" } },
+  },
 });

@@ -1,12 +1,12 @@
-// Claude plan usage: the 5-hour session and the weekly limit, as reported by
-// Claude Code's status line (see src-tauri/src/claude.rs). The numbers are real
-// but only refresh while Claude Code is running, so the age is always shown.
+// Claude plan usage: the 5-hour session and the weekly limit. Straight from
+// Anthropic every few minutes when Claude Code is signed in on this PC; otherwise
+// the last numbers Claude Code's status line reported (see src-tauri/src/claude.rs).
 import { defineWidget } from "./types";
 import { ICONS, bar, esc, ring } from "../ui";
 import { ClaudeUsage, ClaudeWindow, claudeSetup, claudeUsage, openUrl } from "../native";
 
 interface Win { pct: number | null; resets: Date | null }
-interface Data { configured: boolean; updated: Date | null; session: Win; week: Win }
+interface Data { configured: boolean; live: string; updated: Date | null; session: Win; week: Win }
 
 /** Ignore missing windows, expired ones, and the occasional bogus value Claude Code sends after /clear. */
 function win(w: ClaudeWindow | undefined): Win {
@@ -36,6 +36,7 @@ function ago(d: Date | null): string {
 
 const toData = (u: ClaudeUsage): Data => ({
   configured: u.configured,
+  live: u.live ?? "",
   updated: u.data?.updated ? new Date(u.data.updated * 1000) : null,
   session: win(u.data?.rate_limits?.five_hour),
   week: win(u.data?.rate_limits?.seven_day),
@@ -80,8 +81,12 @@ export default defineWidget<Data>({
         <div class="xhead"><span class="xtitle" style="color:var(--orange)">Claude usage</span>
           <button class="btn ghost" data-page>Usage page</button></div>
         ${d.updated ? `<div class="row" style="gap:8px;padding:6px 0">${big("Session (5 hours)", d.session)}${big("Week", d.week)}</div>` : ""}
-        <div class="xnote">${d.updated
-          ? `Reported by Claude Code ${esc(ago(d.updated))}. These numbers cover all your Claude use (chat, Claude Code, desktop), but only refresh while Claude Code is running.`
+        <div class="xnote">${d.live === "ok"
+          ? "Live from your Claude account, refreshed every 5 minutes. Covers all your Claude use: the app, claude.ai and Claude Code."
+          : d.live === "expired"
+            ? "Claude Code's sign-in on this PC has expired. Open Claude Code once (type <code>claude</code> in a terminal) and the numbers will update by themselves again."
+          : d.updated
+          ? `Reported by Claude Code ${esc(ago(d.updated))}. These only refresh while Claude Code runs. Sign in to Claude Code on this PC once and they'll update by themselves.`
           : d.configured
             ? "Set up. The numbers appear the next time Claude Code runs (after your first message in a session)."
             : "GlassDock reads your plan usage from Claude Code's status line, the supported way to get it. Set-up adds a small status-line script to Claude Code's settings (a backup of your settings is kept)."}</div>

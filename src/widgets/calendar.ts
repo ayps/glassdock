@@ -29,6 +29,12 @@ function countdown(e: CalEvent): string {
   return dayLabel(e.start);
 }
 
+/** A meeting starting within `minutes` (or under way): the one to show a Join button for. */
+export function meetingSoon(events: CalEvent[], minutes: number): CalEvent | undefined {
+  const now = Date.now();
+  return events.find((e) => !e.allDay && +e.start - now <= minutes * 60_000 && +e.end > now);
+}
+
 function nextEvent(d: Data): CalEvent | undefined {
   // Prefer the next timed event; fall back to today's all-day ones.
   return d.events.find((e) => !e.allDay) ?? d.events.find((e) => e.allDay && dayLabel(e.start) === "Today");
@@ -71,13 +77,22 @@ const calendar = defineWidget<Data>({
     const e = nextEvent(d);
     if (!e) return `<div class="c">${d.errors.length ? "Couldn't reach Google" : "Nothing in the next 7 days"}</div>`;
     const color = accountColor(e.account, d.accounts);
+    // Ten minutes before a meeting with a Meet link, the card offers to join it.
+    const join = e.meet && meetingSoon([e], 10) === e
+      ? `<button class="btn small join" data-action="join" aria-label="Join ${esc(e.title)}">Join</button>` : "";
     return `<div class="row" style="gap:9px;align-items:stretch;justify-content:flex-start">
-      <div style="width:3px;border-radius:2px;background:${color}"></div>
-      <div class="stack" style="gap:3px;min-width:0">
+      <div style="width:3px;border-radius:2px;background:${color};flex:none"></div>
+      <div class="stack" style="gap:3px;min-width:0;flex:1">
         <span class="b ell" style="font-weight:600">${esc(e.title)}</span>
-        <span class="c ell" style="color:${color}">${dayLabel(e.start) === "Today" ? "" : dayLabel(e.start) + " · "}${whenText(e)} · ${accountLabel(e.account)}</span>
+        <span class="c ell" style="color:${color}">${join ? "" : dayLabel(e.start) === "Today" ? "" : dayLabel(e.start) + " · "}${join ? timeLabel(e.start) : whenText(e)}${join ? "" : ` · ${accountLabel(e.account)}`}</span>
       </div>
+      ${join}
     </div>`;
+  },
+
+  async onAction(action, d) {
+    const e = nextEvent(d);
+    if (action === "join" && e?.meet) await openUrl(e.meet);
   },
 
   panel(root, ctx) {
