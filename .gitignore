@@ -1,0 +1,22 @@
+# Dependencies and build output (recreated by npm install / npm run tauri build)
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# Never commit credentials
+client_secret*.json
+*client*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+!src-tauri/tauri.conf.json
+!src-tauri/capabilities/*.json
+.env
+.env.*
+
+# Local files
+*.zip
+*.log
+.DS_Store
+Thumbs.db

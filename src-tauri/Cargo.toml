@@ -1,0 +1,46 @@
+[package]
+name = "glassdock"
+version = "0.4.0"
+description = "A glass widget dock for Windows 11"
+edition = "2021"
+
+[lib]
+name = "glassdock_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sysinfo = { version = "0.37", default-features = false, features = ["system", "network"] }
+nvml-wrapper = "0.11"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "bmp", "webp"] }
+base64 = "0.22"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["net", "io-util", "time"] }
+keyring = { version = "3", features = ["windows-native"] }
+rand = "0.8"
+sha2 = "0.10"
+tauri-plugin-autostart = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+  "Foundation",
+  "Media_Control",
+  "Storage_Streams",
+  "UI_ViewManagement",
+  "Win32_System_WinRT",
+  "Win32_Foundation",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_Shell",
+] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
